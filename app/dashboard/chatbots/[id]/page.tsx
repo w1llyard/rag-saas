@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect, useMemo } from "react"
 import { useParams, useRouter } from "next/navigation"
 import {
   FileText,
@@ -41,74 +41,15 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DashboardShell } from "@/components/dashboard-shell"
 import { DocumentCard } from "@/components/document-card"
-
-// Mock data for the chatbot details
-const mockChatbotDetails = {
-  id: "cb_1",
-  name: "Product Documentation Bot",
-  description: "Answers questions about our product documentation",
-  documents: 5,
-  queries: 1250,
-  lastUpdated: "2 days ago",
-  status: "active",
-  createdAt: "2023-05-15",
-  model: "gemini-pro",
-  temperature: 0.7,
-  maxTokens: 1024,
-  embedCode: `<script src="https://cdn.ragsaas.com/widget.js"></script>
-<script>
-  window.ragWidget.init({
-    chatbotId: "cb_1",
-    position: "bottom-right",
-    theme: "light",
-    primaryColor: "#9333ea"
-  });
-</script>`,
-}
-
-// Mock data for documents
-const mockDocuments = [
-  {
-    id: "doc_1",
-    name: "Product Manual.pdf",
-    size: "2.4 MB",
-    pages: 24,
-    uploadedAt: "2023-05-15",
-    status: "processed",
-  },
-  {
-    id: "doc_2",
-    name: "API Documentation.pdf",
-    size: "1.8 MB",
-    pages: 18,
-    uploadedAt: "2023-05-16",
-    status: "processed",
-  },
-  {
-    id: "doc_3",
-    name: "User Guide.pdf",
-    size: "3.2 MB",
-    pages: 32,
-    uploadedAt: "2023-05-17",
-    status: "processed",
-  },
-  {
-    id: "doc_4",
-    name: "Installation Instructions.txt",
-    size: "156 KB",
-    pages: 5,
-    uploadedAt: "2023-05-18",
-    status: "processed",
-  },
-  {
-    id: "doc_5",
-    name: "Troubleshooting Guide.md",
-    size: "245 KB",
-    pages: 8,
-    uploadedAt: "2023-05-19",
-    status: "processing",
-  },
-]
+import { useQuery, useQueryClient } from "@tanstack/react-query"
+import { formatDistanceToNow } from "date-fns"
+import { useUserStore } from "@/store/user-store"
+import { getChatbotById } from "@/queries/chatbot"
+import { getDocumentsByChatbot } from "@/queries/document"
+import { mapDocumentRowToCard } from "@/lib/documents/document-ui"
+import { GoogleGenerativeAIModelSelect } from "@/components/google-generative-ai-model-select"
+import { DEFAULT_GOOGLE_CHAT_MODEL_ID } from "@/lib/ai/google-generative-ai-model-ids"
+import { resolveGeminiChatModelId } from "@/lib/rag/resolve-chat-model"
 
 // Mock data for analytics
 const mockAnalytics = {
@@ -127,77 +68,133 @@ const mockAnalytics = {
 export default function ChatbotDetailsPage() {
   const params = useParams()
   const router = useRouter()
+  const queryClient = useQueryClient()
   const chatbotId = params.id as string
+  const numericChatbotId = Number(chatbotId)
+  const idValid = Number.isFinite(numericChatbotId)
+  const { userData: user, isAuthenticated } = useUserStore()
+
   const [activeTab, setActiveTab] = useState("documents")
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
   const [copiedEmbed, setCopiedEmbed] = useState(false)
-  const [chatbotSettings, setChatbotSettings] = useState({
-    name: mockChatbotDetails.name,
-    description: mockChatbotDetails.description,
-    model: mockChatbotDetails.model,
-    temperature: mockChatbotDetails.temperature,
-    maxTokens: mockChatbotDetails.maxTokens,
-    status: mockChatbotDetails.status === "active",
+  const [chatbotSettings, setChatbotSettings] = useState<{
+    name: string
+    description: string
+    model_name: string
+    temperature: number
+    maxTokens: number
+    status: boolean
+  }>({
+    name: "",
+    description: "",
+    model_name: DEFAULT_GOOGLE_CHAT_MODEL_ID,
+    temperature: 0.7,
+    maxTokens: 1024,
+    status: true,
   })
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  const { data: chatbot, isLoading: chatbotLoading, isError: chatbotError } = useQuery({
+    queryKey: ["chatbot", chatbotId],
+    queryFn: async () => {
+      const { data, error } = await getChatbotById(numericChatbotId)
+      if (error) throw error
+      if (!data) throw new Error("Chatbot not found")
+      return data
+    },
+    enabled: !!user && isAuthenticated && idValid,
+  })
+
+  const { data: documentsData = [], isLoading: documentsLoading } = useQuery({
+    queryKey: ["documents", chatbotId],
+    queryFn: async () => {
+      const { data, error } = await getDocumentsByChatbot(numericChatbotId)
+      if (error) throw error
+      return data ?? []
+    },
+    enabled: !!user && isAuthenticated && idValid,
+  })
+
+  const embedCode = useMemo(
+    () => `<script src="https://cdn.ragsaas.com/widget.js"></script>
+<script>
+  window.ragWidget.init({
+    chatbotId: "${chatbotId}",
+    position: "bottom-right",
+    theme: "light",
+    primaryColor: "#9333ea"
+  });
+</script>`,
+    [chatbotId],
+  )
+
+  useEffect(() => {
+    if (!chatbot) return
+    setChatbotSettings({
+      name: chatbot.name,
+      description: chatbot.description ?? "",
+      model_name: resolveGeminiChatModelId(chatbot.model_name),
+      temperature: chatbot.temperature ?? 0.7,
+      maxTokens: chatbot.max_tokens ?? 1024,
+      status: chatbot.status === "active",
+    })
+  }, [chatbot])
+
+  const documentCards = documentsData.map(mapDocumentRowToCard)
+  const processedCount = documentsData.filter((d) => d.processing_status === "processed").length
+
+  const lastUpdatedLabel = (() => {
+    const raw =
+      chatbot?.last_document_or_setting_change_at ?? chatbot?.updated_at ?? chatbot?.created_at
+    if (!raw) return "—"
+    try {
+      return formatDistanceToNow(new Date(raw), { addSuffix: true })
+    } catch {
+      return "—"
+    }
+  })()
+
   const handleUploadClick = () => {
-    // Trigger the hidden file input
     if (fileInputRef.current) {
       fileInputRef.current.click()
     }
   }
 
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
-    if (!files || files.length === 0) return
+    if (!files?.length || !idValid) return
 
     setIsUploading(true)
-
-    // In a real app, you would upload the files to your server here
-    // For example, using FormData and fetch:
-    // const formData = new FormData();
-    // Array.from(files).forEach(file => {
-    //   formData.append('documents', file);
-    // });
-    //
-    // fetch(`/api/chatbots/${chatbotId}/documents`, {
-    //   method: 'POST',
-    //   body: formData
-    // })
-    //   .then(response => response.json())
-    //   .then(data => {
-    //     // Handle successful upload
-    //     console.log('Upload successful', data);
-    //   })
-    //   .catch(error => {
-    //     // Handle error
-    //     console.error('Upload failed', error);
-    //   })
-    //   .finally(() => {
-    //     setIsUploading(false);
-    //   });
-
-    // For now, we'll simulate the upload with a timeout
-    setTimeout(() => {
-      console.log(
-        "Files to upload:",
-        Array.from(files).map((file) => file.name),
-      )
+    setUploadError(null)
+    try {
+      for (const file of Array.from(files)) {
+        const formData = new FormData()
+        formData.append("file", file)
+        const res = await fetch(`/api/chatbots/${chatbotId}/documents`, {
+          method: "POST",
+          body: formData,
+        })
+        const json = (await res.json().catch(() => ({}))) as { error?: string }
+        if (!res.ok) {
+          throw new Error(json.error || `Upload failed (${res.status})`)
+        }
+      }
+      await queryClient.invalidateQueries({ queryKey: ["documents", chatbotId] })
+      await queryClient.invalidateQueries({ queryKey: ["chatbots", user?.user_id] })
+    } catch (e) {
+      setUploadError(e instanceof Error ? e.message : "Upload failed")
+    } finally {
       setIsUploading(false)
-
-      // Clear the input so the same file can be uploaded again if needed
       if (fileInputRef.current) {
         fileInputRef.current.value = ""
       }
-
-      // In a real app, you would update the documents list here
-    }, 2000)
+    }
   }
 
   const handleCopyEmbed = () => {
-    navigator.clipboard.writeText(mockChatbotDetails.embedCode)
+    navigator.clipboard.writeText(embedCode)
     setCopiedEmbed(true)
     setTimeout(() => setCopiedEmbed(false), 2000)
   }
@@ -209,17 +206,54 @@ export default function ChatbotDetailsPage() {
     }))
   }
 
+  if (!idValid) {
+    return (
+      <DashboardShell>
+        <p className="text-muted-foreground">Invalid chatbot link.</p>
+      </DashboardShell>
+    )
+  }
+
+  if (!user || !isAuthenticated) {
+    return (
+      <DashboardShell>
+        <p className="text-muted-foreground">Sign in to manage this chatbot.</p>
+      </DashboardShell>
+    )
+  }
+
+  if (chatbotLoading) {
+    return (
+      <DashboardShell>
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </DashboardShell>
+    )
+  }
+
+  if (chatbotError || !chatbot) {
+    return (
+      <DashboardShell>
+        <p className="text-muted-foreground">Chatbot not found or you don&apos;t have access.</p>
+        <Button className="mt-4" variant="outline" onClick={() => router.push("/dashboard")}>
+          Back to dashboard
+        </Button>
+      </DashboardShell>
+    )
+  }
+
   return (
     <DashboardShell>
       <div className="flex items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-2">
-            <h1 className="text-3xl font-bold tracking-tight">{mockChatbotDetails.name}</h1>
-            <Badge variant={mockChatbotDetails.status === "active" ? "default" : "secondary"} className="ml-2">
-              {mockChatbotDetails.status === "active" ? "Active" : "Inactive"}
+            <h1 className="text-3xl font-bold tracking-tight">{chatbot.name}</h1>
+            <Badge variant={chatbot.status === "active" ? "default" : "secondary"} className="ml-2">
+              {chatbot.status === "active" ? "Active" : "Inactive"}
             </Badge>
           </div>
-          <p className="text-muted-foreground">{mockChatbotDetails.description}</p>
+          <p className="text-muted-foreground">{chatbot.description ?? "—"}</p>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => router.push(`/dashboard/chatbots/${chatbotId}/preview`)}>
@@ -255,7 +289,7 @@ export default function ChatbotDetailsPage() {
             <MessageSquare className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{mockChatbotDetails.queries.toLocaleString()}</div>
+            <div className="text-2xl font-bold">{chatbot.queries.toLocaleString()}</div>
             <p className="text-xs text-muted-foreground">+{Math.floor(Math.random() * 100)} from last week</p>
           </CardContent>
         </Card>
@@ -265,10 +299,8 @@ export default function ChatbotDetailsPage() {
             <FileText className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{mockChatbotDetails.documents}</div>
-            <p className="text-xs text-muted-foreground">
-              {mockDocuments.filter((doc) => doc.status === "processed").length} processed
-            </p>
+            <div className="text-2xl font-bold">{documentsData.length}</div>
+            <p className="text-xs text-muted-foreground">{processedCount} processed</p>
           </CardContent>
         </Card>
         <Card>
@@ -287,7 +319,7 @@ export default function ChatbotDetailsPage() {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{mockChatbotDetails.lastUpdated}</div>
+            <div className="text-2xl font-bold">{lastUpdatedLabel}</div>
             <p className="text-xs text-muted-foreground">Last document or setting change</p>
           </CardContent>
         </Card>
@@ -331,13 +363,25 @@ export default function ChatbotDetailsPage() {
             </Button>
           </div>
 
-          <div className="grid gap-4">
-            {mockDocuments.map((document) => (
-              <DocumentCard key={document.id} document={document} />
-            ))}
-          </div>
+          {uploadError ? (
+            <p className="text-sm text-destructive" role="alert">
+              {uploadError}
+            </p>
+          ) : null}
 
-          {mockDocuments.length === 0 && (
+          {documentsLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="grid gap-4">
+              {documentCards.map((document) => (
+                <DocumentCard key={document.id} document={document} />
+              ))}
+            </div>
+          )}
+
+          {!documentsLoading && documentCards.length === 0 && (
             <div className="flex flex-col items-center justify-center py-12 text-center">
               <FileUp className="h-12 w-12 text-muted-foreground mb-4" />
               <h3 className="text-lg font-medium">No documents yet</h3>
@@ -398,17 +442,15 @@ export default function ChatbotDetailsPage() {
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="model">Model</Label>
-                <Select value={chatbotSettings.model} onValueChange={(value) => handleSettingsChange("model", value)}>
-                  <SelectTrigger id="model">
-                    <SelectValue placeholder="Select a model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="gemini-pro">Gemini Pro</SelectItem>
-                    <SelectItem value="gemini-pro-vision">Gemini Pro Vision</SelectItem>
-                    <SelectItem value="gemini-ultra">Gemini Ultra</SelectItem>
-                  </SelectContent>
-                </Select>
+                <Label htmlFor="model_name">Model</Label>
+                <GoogleGenerativeAIModelSelect
+                  id="model_name"
+                  value={chatbotSettings.model_name}
+                  onValueChange={(value) => handleSettingsChange("model_name", value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Model id passed to <code className="text-[10px]">@ai-sdk/google</code> for chat.
+                </p>
               </div>
               <div className="space-y-2">
                 <div className="flex justify-between">
@@ -456,7 +498,7 @@ export default function ChatbotDetailsPage() {
             <CardContent>
               <div className="relative">
                 <pre className="bg-muted p-4 rounded-md overflow-x-auto text-sm font-mono">
-                  {mockChatbotDetails.embedCode}
+                  {embedCode}
                 </pre>
                 <Button variant="ghost" size="sm" className="absolute top-2 right-2" onClick={handleCopyEmbed}>
                   {copiedEmbed ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
@@ -503,7 +545,7 @@ export default function ChatbotDetailsPage() {
                 <Label htmlFor="chatTitle">Chat Title</Label>
                 <Input
                   id="chatTitle"
-                  defaultValue="Product Documentation Bot"
+                  defaultValue={chatbotSettings.name}
                   placeholder="Enter a title for your chat widget"
                 />
               </div>
@@ -511,7 +553,7 @@ export default function ChatbotDetailsPage() {
                 <Label htmlFor="welcomeMessage">Welcome Message</Label>
                 <Textarea
                   id="welcomeMessage"
-                  defaultValue="Hello! I'm your product documentation assistant. How can I help you today?"
+                  defaultValue={`Hello! I'm ${chatbotSettings.name}. How can I help you today?`}
                   placeholder="Enter a welcome message"
                   rows={3}
                 />
@@ -548,7 +590,7 @@ export default function ChatbotDetailsPage() {
                     <div className="size-6 rounded-md bg-purple-600 flex items-center justify-center text-white text-xs font-bold">
                       R
                     </div>
-                    <span className="font-medium text-sm">Product Documentation Bot</span>
+                    <span className="font-medium text-sm">{chatbotSettings.name}</span>
                   </div>
                   <Button variant="ghost" size="icon" className="h-6 w-6">
                     <ChevronDown className="h-4 w-4" />

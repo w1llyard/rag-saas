@@ -7,18 +7,25 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { DialogFooter } from "@/components/ui/dialog"
+import { GoogleGenerativeAIModelSelect } from "@/components/google-generative-ai-model-select"
+import { DEFAULT_GOOGLE_CHAT_MODEL_ID } from "@/lib/ai/google-generative-ai-model-ids"
+
+export type CreateChatbotFormPayload = {
+  name: string
+  description: string
+  model_name: string
+}
 
 interface CreateChatbotFormProps {
-  onSubmit: (data: any) => void
+  onSubmit: (data: CreateChatbotFormPayload) => void
 }
 
 export function CreateChatbotForm({ onSubmit }: CreateChatbotFormProps) {
   const [formData, setFormData] = useState({
     name: "",
     description: "",
-    model: "gemini-pro",
+    model_name: DEFAULT_GOOGLE_CHAT_MODEL_ID,
   })
 
   const handleChange = (field: string, value: string) => {
@@ -57,18 +64,16 @@ export function CreateChatbotForm({ onSubmit }: CreateChatbotFormProps) {
           />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="model">Model</Label>
-          <Select value={formData.model} onValueChange={(value) => handleChange("model", value)}>
-            <SelectTrigger id="model">
-              <SelectValue placeholder="Select a model" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="gemini-pro">Gemini Pro</SelectItem>
-              <SelectItem value="gemini-pro-vision">Gemini Pro Vision</SelectItem>
-              <SelectItem value="gemini-ultra">Gemini Ultra</SelectItem>
-            </SelectContent>
-          </Select>
-          <p className="text-sm text-muted-foreground">Select the AI model that will power your chatbot</p>
+          <Label htmlFor="model_name">Model</Label>
+          <GoogleGenerativeAIModelSelect
+            id="model_name"
+            value={formData.model_name}
+            onValueChange={(value) => handleChange("model_name", value)}
+          />
+          <p className="text-sm text-muted-foreground">
+            Google Generative AI model id (same identifiers as{" "}
+            <code className="text-xs">@ai-sdk/google</code>).
+          </p>
         </div>
       </div>
       <DialogFooter>

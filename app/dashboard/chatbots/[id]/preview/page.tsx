@@ -2,92 +2,196 @@
 
 import type React from "react"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Bot, Send, User, RefreshCw, Download } from "lucide-react"
+import { useQuery } from "@tanstack/react-query"
+import { ArrowLeft, Bot, Send, User, RefreshCw, Download, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { DashboardShell } from "@/components/dashboard-shell"
-
-// Sample conversation for demonstration
-const initialMessages = [
-  {
-    role: "assistant",
-    content: "Hello! I'm your product documentation assistant. How can I help you today?",
-    timestamp: new Date(Date.now() - 1000 * 60 * 5).toISOString(),
-  },
-]
+import { useUserStore } from "@/store/user-store"
+import { getChatbotById } from "@/queries/chatbot"
+import { getDocumentsByChatbot } from "@/queries/document"
 
 type Message = {
+  id: string
   role: "user" | "assistant"
   content: string
   timestamp: string
+}
+
+function buildWelcomeMessage(chatbotName: string): Message {
+  return {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    content: `Hi! I'm ${chatbotName}. Ask me anything based on your uploaded documents.`,
+    timestamp: new Date().toISOString(),
+  }
 }
 
 export default function ChatbotPreviewPage() {
   const params = useParams()
   const router = useRouter()
   const chatbotId = params.id as string
-  const [messages, setMessages] = useState<Message[]>(initialMessages)
+  const numericId = Number(chatbotId)
+  const idValid = Number.isFinite(numericId)
+  const { userData: user, isAuthenticated } = useUserStore()
+
+  const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
+  const [chatError, setChatError] = useState<string | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Auto-scroll to bottom when messages change
+  const { data: chatbot, isLoading: chatbotLoading, isError: chatbotError } = useQuery({
+    queryKey: ["chatbot", chatbotId],
+    queryFn: async () => {
+      const { data, error } = await getChatbotById(numericId)
+      if (error) throw error
+      if (!data) throw new Error("Not found")
+      return data
+    },
+    enabled: !!user && isAuthenticated && idValid,
+  })
+
+  const { data: documents = [] } = useQuery({
+    queryKey: ["documents", chatbotId],
+    queryFn: async () => {
+      const { data, error } = await getDocumentsByChatbot(numericId)
+      if (error) throw error
+      return data ?? []
+    },
+    enabled: !!user && isAuthenticated && idValid,
+  })
+
+  const processedDocCount = documents.filter((d) => d.processing_status === "processed").length
+
+  useEffect(() => {
+    if (chatbot) {
+      setMessages([buildWelcomeMessage(chatbot.name)])
+      setChatError(null)
+    }
+  }, [chatbot?.chatbot_id, chatbot?.name])
+
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" })
   }, [messages])
 
-  // Focus input on load
   useEffect(() => {
     inputRef.current?.focus()
-  }, [])
+  }, [chatbot])
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleReset = useCallback(() => {
+    if (chatbot) {
+      setMessages([buildWelcomeMessage(chatbot.name)])
+      setChatError(null)
+    }
+    inputRef.current?.focus()
+  }, [chatbot])
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!input.trim()) return
+    if (!input.trim() || isLoading || !idValid) return
 
-    // Add user message
     const userMessage: Message = {
+      id: crypto.randomUUID(),
       role: "user",
-      content: input,
+      content: input.trim(),
       timestamp: new Date().toISOString(),
     }
-    setMessages((prev) => [...prev, userMessage])
+
+    const nextMessages = [...messages, userMessage]
+    setMessages(nextMessages)
     setInput("")
     setIsLoading(true)
+    setChatError(null)
 
-    // Simulate AI response after a delay
-    setTimeout(() => {
-      // This would be replaced with actual API call to your backend
-      const mockResponses = [
-        "Based on the documentation, you can find this information in the user manual section 3.2.",
-        "The product supports Windows 10/11, macOS 10.15+, and Ubuntu 20.04+. You'll need at least 4GB RAM and 10GB of free disk space.",
-        "To reset your password, go to the login page and click 'Forgot Password'. You'll receive an email with instructions.",
-        "The installation process typically takes 5-10 minutes depending on your system specifications.",
-        "Yes, we offer a mobile app for both iOS and Android. You can download it from the respective app stores.",
-      ]
+    try {
+      const res = await fetch(`/api/chatbots/${chatbotId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: nextMessages.map(({ role, content }) => ({ role, content })),
+        }),
+      })
 
-      const randomResponse = mockResponses[Math.floor(Math.random() * mockResponses.length)]
+      const data = (await res.json()) as { reply?: string; error?: string }
 
-      const assistantMessage: Message = {
-        role: "assistant",
-        content: randomResponse,
-        timestamp: new Date().toISOString(),
+      if (!res.ok) {
+        throw new Error(data.error || `Request failed (${res.status})`)
       }
 
-      setMessages((prev) => [...prev, assistantMessage])
+      if (!data.reply?.trim()) {
+        throw new Error("Empty response from assistant")
+      }
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: data.reply!,
+          timestamp: new Date().toISOString(),
+        },
+      ])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Something went wrong"
+      setChatError(msg)
+    } finally {
       setIsLoading(false)
-    }, 1500)
+    }
   }
 
-  const handleReset = () => {
-    setMessages(initialMessages)
-    inputRef.current?.focus()
+  const exportConversation = () => {
+    const text = messages.map((m) => `${m.role.toUpperCase()}: ${m.content}`).join("\n\n")
+    const blob = new Blob([text], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `chatbot-${chatbotId}-preview.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  if (!idValid) {
+    return (
+      <DashboardShell>
+        <p className="text-muted-foreground">Invalid chatbot link.</p>
+      </DashboardShell>
+    )
+  }
+
+  if (!user || !isAuthenticated) {
+    return (
+      <DashboardShell>
+        <p className="text-muted-foreground">Sign in to use the preview.</p>
+      </DashboardShell>
+    )
+  }
+
+  if (chatbotLoading) {
+    return (
+      <DashboardShell>
+        <div className="flex items-center justify-center py-24">
+          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        </div>
+      </DashboardShell>
+    )
+  }
+
+  if (chatbotError || !chatbot) {
+    return (
+      <DashboardShell>
+        <p className="text-muted-foreground">Chatbot not found or you don&apos;t have access.</p>
+        <Button className="mt-4" variant="outline" onClick={() => router.push("/dashboard")}>
+          Back to dashboard
+        </Button>
+      </DashboardShell>
+    )
   }
 
   return (
@@ -101,7 +205,7 @@ export default function ChatbotPreviewPage() {
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Chatbot Preview</h1>
             <p className="text-sm sm:text-base text-muted-foreground">
-              Test your chatbot and see how it responds to questions
+              RAG answers from your processed documents (Gemini + embeddings)
             </p>
           </div>
         </div>
@@ -111,7 +215,7 @@ export default function ChatbotPreviewPage() {
             <span className="hidden sm:inline">Reset Chat</span>
             <span className="sm:hidden">Reset</span>
           </Button>
-          <Button variant="outline" size="sm" className="h-9 sm:h-10">
+          <Button variant="outline" size="sm" className="h-9 sm:h-10" onClick={exportConversation}>
             <Download className="mr-2 h-4 w-4" />
             <span className="hidden sm:inline">Export Conversation</span>
             <span className="sm:hidden">Export</span>
@@ -128,7 +232,7 @@ export default function ChatbotPreviewPage() {
                   <Bot className="size-3 sm:size-4" />
                 </div>
                 <div>
-                  <CardTitle className="text-sm sm:text-base">Product Documentation Bot</CardTitle>
+                  <CardTitle className="text-sm sm:text-base">{chatbot.name}</CardTitle>
                   <CardDescription className="text-xs">Chatbot ID: {chatbotId}</CardDescription>
                 </div>
                 <Badge variant="outline" className="ml-auto text-xs">
@@ -138,9 +242,14 @@ export default function ChatbotPreviewPage() {
             </CardHeader>
             <CardContent className="p-0 flex flex-col h-[calc(100%-8rem)]">
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                {messages.map((message, index) => (
+                {chatError ? (
+                  <p className="text-sm text-destructive bg-destructive/10 rounded-md p-3" role="alert">
+                    {chatError}
+                  </p>
+                ) : null}
+                {messages.map((message) => (
                   <div
-                    key={index}
+                    key={message.id}
                     className={`flex gap-2 sm:gap-3 items-start ${message.role === "user" ? "justify-end" : ""}`}
                   >
                     {message.role === "assistant" && (
@@ -193,11 +302,20 @@ export default function ChatbotPreviewPage() {
                     ref={inputRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
-                    placeholder="Ask a question..."
+                    placeholder={
+                      processedDocCount === 0
+                        ? "Upload processed documents first…"
+                        : "Ask a question about your documents…"
+                    }
                     className="flex-1 h-9 sm:h-10 text-sm"
-                    disabled={isLoading}
+                    disabled={isLoading || processedDocCount === 0}
                   />
-                  <Button type="submit" size="sm" className="h-9 sm:h-10" disabled={isLoading || !input.trim()}>
+                  <Button
+                    type="submit"
+                    size="sm"
+                    className="h-9 sm:h-10"
+                    disabled={isLoading || !input.trim() || processedDocCount === 0}
+                  >
                     <Send className="h-4 w-4 sm:mr-2" />
                     <span className="hidden sm:inline">Send</span>
                   </Button>
@@ -216,19 +334,23 @@ export default function ChatbotPreviewPage() {
             <CardContent className="space-y-3 p-4">
               <div>
                 <h3 className="text-xs sm:text-sm font-medium">Model</h3>
-                <p className="text-xs sm:text-sm text-muted-foreground">Gemini Pro</p>
+                <p className="text-xs sm:text-sm text-muted-foreground">
+                  {chatbot.model_name ?? "gemini-2.0-flash"}
+                </p>
               </div>
               <div>
                 <h3 className="text-xs sm:text-sm font-medium">Documents</h3>
-                <p className="text-xs sm:text-sm text-muted-foreground">5 documents</p>
+                <p className="text-xs sm:text-sm text-muted-foreground">
+                  {processedDocCount} processed ({documents.length} total)
+                </p>
               </div>
               <div>
                 <h3 className="text-xs sm:text-sm font-medium">Temperature</h3>
-                <p className="text-xs sm:text-sm text-muted-foreground">0.7</p>
+                <p className="text-xs sm:text-sm text-muted-foreground">{chatbot.temperature ?? 0.7}</p>
               </div>
               <div>
-                <h3 className="text-xs sm:text-sm font-medium">Max Tokens</h3>
-                <p className="text-xs sm:text-sm text-muted-foreground">1024</p>
+                <h3 className="text-xs sm:text-sm font-medium">Max output tokens</h3>
+                <p className="text-xs sm:text-sm text-muted-foreground">{chatbot.max_tokens ?? 2048}</p>
               </div>
             </CardContent>
             <CardFooter className="p-4">
@@ -252,19 +374,15 @@ export default function ChatbotPreviewPage() {
               <ul className="space-y-2 text-xs sm:text-sm">
                 <li className="flex gap-2">
                   <span className="text-purple-600">•</span>
-                  <span>Try asking specific questions about your documents</span>
+                  <span>Answers use the top matching text chunks from your files</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="text-purple-600">•</span>
-                  <span>Test edge cases and complex queries</span>
+                  <span>Rephrase if the model says the context doesn&apos;t contain the answer</span>
                 </li>
                 <li className="flex gap-2">
                   <span className="text-purple-600">•</span>
-                  <span>Verify accuracy of responses against your documents</span>
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-purple-600">•</span>
-                  <span>Try different phrasings of the same question</span>
+                  <span>Upload more documents on the chatbot detail page if coverage is thin</span>
                 </li>
               </ul>
             </CardContent>
