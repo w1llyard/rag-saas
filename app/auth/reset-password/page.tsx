@@ -130,7 +130,7 @@ export default function ResetPasswordPage() {
       <div className="relative z-10 w-full max-w-md">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
           <div className="text-center mb-8">
-            <Link href="/auth" className="inline-flex items-center gap-2 mb-6 group">
+            <Link href="/" className="inline-flex items-center gap-2 mb-6 group">
               <ArrowLeft className="size-4 transition-transform group-hover:-translate-x-1" />
               <span className="text-sm text-muted-foreground">Back to sign in</span>
             </Link>

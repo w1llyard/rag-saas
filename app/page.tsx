@@ -20,28 +20,20 @@ export default function LandingPage() {
     <div className="flex min-h-[100dvh] flex-col relative overflow-hidden">
       <NavBar />
       <main className="flex-1">
-        {/* Hero Section */}
         <HeroSection />
 
-        {/* Features Section */}
         <FeatureSection/>
 
-        {/* Logo Section */}
         <LogoSlider />
 
-        {/* How It Works Section */}
         <HowItWorkSection />
 
-        {/* Testimonials Section */}
         <TestimonialsSection />
 
-        {/* Demo Section */}
         <DemoSection />
 
-        {/* Pricing Section */}
         <PricingSection />
 
-        {/* FAQ Section */}
         <FAQSection />
 
       </main>

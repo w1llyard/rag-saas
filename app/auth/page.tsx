@@ -2,11 +2,11 @@
 
 import type React from "react"
 
-import { useState, useEffect } from "react"
+import { Suspense, useState, useEffect } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 import { motion, AnimatePresence } from "framer-motion"
-import { Eye, EyeOff, Github, Mail, Lock, User, ArrowLeft, CheckCircle, AlertCircle, Loader2 } from "lucide-react"
+import { Eye, EyeOff, Github, Mail, Lock, User, CheckCircle, AlertCircle, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -19,7 +19,7 @@ import { createUser } from "@/services/user-service"
 
 type AuthMode = "signin" | "signup" | "forgot-password"
 
-export default function AuthPage() {
+function AuthPageContent() {
   const [mode, setMode] = useState<AuthMode>("signin")
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
@@ -39,9 +39,13 @@ export default function AuthPage() {
   const { setUser } = useUserStore()
 
   useEffect(() => {
-    const mode = searchParams.get("mode")
-    if (mode === "signup" || mode === "forgot-password") {
-      setMode(mode as AuthMode)
+    const modeParam = searchParams.get("mode")
+    if (modeParam === "signup" || modeParam === "forgot-password") {
+      setMode(modeParam as AuthMode)
+    }
+    const err = searchParams.get("error")
+    if (err) {
+      setError(decodeURIComponent(err))
     }
   }, [searchParams])
 
@@ -108,11 +112,10 @@ export default function AuthPage() {
             },
           },
         });
-      
+
         if (error) throw error;
-      
+
         if (data.user) {
-          // Create a profile in the database
           try {
             createUser(
               {
@@ -130,9 +133,9 @@ export default function AuthPage() {
               setError("Your account was created, but we couldn't set up your profile. Please contact support.");
               return;
             }
-          }        
+          }
         }
-      
+
         setSuccess("Check your email for the confirmation link!");
       } else if (mode === "forgot-password") {
         const { error } = await supabase.auth.resetPasswordForEmail(formData.email, {
@@ -209,11 +212,9 @@ export default function AuthPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Animated Background */}
       <div className="absolute inset-0 bg-gradient-to-br from-purple-50 via-white to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-purple-900/20" />
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#f0f0f0_1px,transparent_1px),linear-gradient(to_bottom,#f0f0f0_1px,transparent_1px)] dark:bg-[linear-gradient(to_right,#1f1f1f_1px,transparent_1px),linear-gradient(to_bottom,#1f1f1f_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_80%_50%_at_50%_0%,#000_70%,transparent_110%)]" />
 
-      {/* Floating Elements */}
       <div className="absolute top-20 left-20 w-72 h-72 bg-purple-300/20 rounded-full blur-3xl animate-pulse" />
       <div className="absolute bottom-20 right-20 w-96 h-96 bg-pink-300/20 rounded-full blur-3xl animate-pulse delay-1000" />
 
@@ -223,7 +224,6 @@ export default function AuthPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5 }}
         >
-          {/* Header */}
           <div className="text-center mb-8">
             <div className="flex items-center justify-center gap-3 mb-6">
               <Link
@@ -240,7 +240,6 @@ export default function AuthPage() {
             </div>
           </div>
 
-          {/* Auth Card */}
           <Card className="backdrop-blur-sm bg-white/80 dark:bg-gray-900/80 border-white/20 shadow-2xl">
             <CardHeader className="text-center pb-4">
               <CardTitle className="text-2xl font-bold">{getTitle()}</CardTitle>
@@ -250,7 +249,6 @@ export default function AuthPage() {
             </CardHeader>
 
             <CardContent className="space-y-6">
-              {/* Success Message */}
               <AnimatePresence>
                 {success && (
                   <motion.div
@@ -268,7 +266,6 @@ export default function AuthPage() {
                 )}
               </AnimatePresence>
 
-              {/* Error Message */}
               <AnimatePresence>
                 {error && (
                   <motion.div
@@ -284,7 +281,6 @@ export default function AuthPage() {
                 )}
               </AnimatePresence>
 
-              {/* OAuth Buttons */}
               {mode !== "forgot-password" && (
                 <div className="space-y-3">
                   <Button
@@ -337,7 +333,6 @@ export default function AuthPage() {
                 </div>
               )}
 
-              {/* Email Form */}
               <form onSubmit={handleEmailAuth} className="space-y-4">
                 {mode === "signup" && (
                   <div className="space-y-2">
@@ -453,7 +448,6 @@ export default function AuthPage() {
                 </Button>
               </form>
 
-              {/* Footer Links */}
               <div className="text-center space-y-2">
                 {mode === "signin" && (
                   <>
@@ -465,7 +459,7 @@ export default function AuthPage() {
                       Forgot your password?
                     </button>
                     <p className="text-sm text-muted-foreground">
-                      Don't have an account?{" "}
+                      Don&apos;t have an account?{" "}
                       <button
                         type="button"
                         className="text-purple-600 hover:text-purple-700 hover:underline font-medium"
@@ -527,4 +521,18 @@ export default function AuthPage() {
       </div>
     </div>
   );
+}
+
+export default function AuthPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-purple-50 via-white to-pink-50 dark:from-gray-900 dark:via-gray-800 dark:to-purple-900/20">
+          <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
+        </div>
+      }
+    >
+      <AuthPageContent />
+    </Suspense>
+  )
 }
